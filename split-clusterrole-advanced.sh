@@ -251,6 +251,7 @@ kind: ClusterRole
 metadata:
   name: $ORIGINAL_ROLE_NAME
   annotations:
+    rbac.authorization.k8s.io/autoupdate: "true"
     description: "Aggregated role for $ORIGINAL_ROLE_NAME"
     generated-by: "split-clusterrole-advanced.sh"
     generated-at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
