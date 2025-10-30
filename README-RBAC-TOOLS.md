@@ -59,6 +59,7 @@ KUBECONFIG=~/.kube/dev  ./rbac-tools.sh extract engineer-role --output roles/eng
 - **Git-Friendly**: Small, focused files with meaningful names
 - **Auto-Aggregation**: Main role automatically combines all components
 - **Clean Output**: YAML or JSON with comments and metadata
+- **Kustomize Ready**: Auto-generates `kustomization.yaml` for easy deployment
 
 ### Usage Examples
 
@@ -101,6 +102,7 @@ engineer-role_aggregated/
 ├── 07-operators.yaml       # OLM operators
 ├── 08-build.yaml           # builds, images, templates
 ├── 20-kafka.yaml           # Strimzi Kafka
+├── kustomization.yaml      # Kustomize manifest (auto-generated)
 └── README.md
 ```
 
@@ -130,10 +132,13 @@ engineer-role_aggregated/
 ### Apply to Cluster
 
 ```bash
-# Apply all at once
+# With Kustomize (recommended - uses generated kustomization.yaml)
+kubectl apply -k engineer-role_aggregated/
+
+# Or apply all at once
 kubectl apply -f engineer-role_aggregated/
 
-# Or in order (recommended for first-time)
+# Or in order (for first-time setup)
 kubectl apply -f engineer-role_aggregated/00-AGGREGATOR.yaml
 kubectl apply -f engineer-role_aggregated/ --recursive
 
@@ -395,6 +400,55 @@ git diff main feature/add-kafka-access -- split/engineer-role/
 
 ## 🔧 Advanced Features
 
+### Kustomize Integration
+
+The tool automatically generates a `kustomization.yaml` file (when using YAML format) that includes all component files in the correct order:
+
+```yaml
+# Example generated kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Main aggregator role (must be applied first)
+  - 00-AGGREGATOR.yaml
+  
+  # Component roles (automatically aggregated)
+  - 01-core.yaml
+  - 02-apps.yaml
+  - 03-networking.yaml
+  # ... etc
+```
+
+**Benefits**:
+- One command deployment: `kubectl apply -k ./`
+- Works with GitOps tools (ArgoCD, Flux)
+- Easy to include in larger Kustomize overlays
+- Proper ordering guaranteed
+
+**Usage with overlays**:
+```yaml
+# overlays/prod/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base/engineer-role_aggregated
+
+# Add prod-specific patches if needed
+patches:
+  - target:
+      kind: ClusterRole
+      name: engineer-role-monitoring
+    patch: |-
+      - op: add
+        path: /rules/-
+        value:
+          apiGroups: [""]
+          resources: ["secrets"]
+          verbs: ["get", "list"]
+```
+
 ### Custom Category Mapping
 
 Edit `split-clusterrole-advanced.sh` and modify `CATEGORY_MAP`:
@@ -468,7 +522,7 @@ jobs:
 ## 📋 Requirements
 
 - `bash` 4.0+
-- `jq` 1.6+
+- `jq` 1.8.1+ (**required minimum version**)
 - `yq` 4.0+ (mikefarah/yq, not python-yq)
 - `kubectl` (for extract command)
 - `diff`, `comm`, `sort` (standard Unix tools)
@@ -476,8 +530,13 @@ jobs:
 ### Install Dependencies
 
 ```bash
-# Ubuntu/Debian
-sudo apt-get install -y jq
+# Ubuntu/Debian - Install jq 1.8.1+
+# Note: apt package might be outdated, use GitHub releases for latest version
+sudo wget -qO /usr/local/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64
+sudo chmod +x /usr/local/bin/jq
+
+# Verify jq version
+jq --version  # Should be jq-1.8.1 or higher
 
 # Install yq
 sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
@@ -485,6 +544,7 @@ sudo chmod +x /usr/local/bin/yq
 
 # macOS
 brew install jq yq
+# If jq is too old: brew upgrade jq
 ```
 
 ---
