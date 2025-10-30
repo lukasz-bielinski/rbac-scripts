@@ -198,6 +198,12 @@ declare -A CATEGORY_MAP=(
 categorize_api_group() {
     local api_group="$1"
     
+    # Empty string means core Kubernetes API
+    if [[ -z "$api_group" ]]; then
+        echo "01-core"
+        return
+    fi
+    
     # Check exact match
     if [[ -n "${CATEGORY_MAP[$api_group]:-}" ]]; then
         echo "${CATEGORY_MAP[$api_group]}"
@@ -259,8 +265,9 @@ AGGREGATOR_FILE="${OUTPUT_DIR}/00-AGGREGATOR.${OUTPUT_FORMAT}"
 echo "$AGGREGATOR_CONTENT" > "$AGGREGATOR_FILE"
 log_success "Created aggregator: $AGGREGATOR_FILE"
 
-# Extract all API groups
-API_GROUPS=$(jq -r '.rules[]?.apiGroups[]? | select(. != null)' "$INPUT_JSON" | sort -u)
+# Extract all API groups (including empty string for core API)
+# Use special marker __CORE__ for empty apiGroups to prevent bash from losing it
+API_GROUPS=$(jq -r '.rules[]?.apiGroups[]? | select(. != null) | if . == "" then "__CORE__" else . end' "$INPUT_JSON" | sort -u)
 
 if [[ -z "$API_GROUPS" ]]; then
     log_warning "No API groups found in rules"
@@ -274,9 +281,12 @@ case "$GROUPING_STRATEGY" in
     apigroup)
         # One file per API group
         for api_group in $API_GROUPS; do
-            if [[ -z "$api_group" ]]; then
+            # Convert __CORE__ marker back to empty string for core API
+            if [[ "$api_group" == "__CORE__" ]]; then
+                REAL_API_GROUP=""
                 SAFE_NAME="core"
             else
+                REAL_API_GROUP="$api_group"
                 SAFE_NAME=$(sanitize_name "$api_group")
             fi
             
@@ -284,14 +294,14 @@ case "$GROUPING_STRATEGY" in
             OUTPUT_FILE="${OUTPUT_DIR}/${SAFE_NAME}.${OUTPUT_FORMAT}"
             
             # Extract rules for this API group
-            RULES=$(jq --arg group "$api_group" \
+            RULES=$(jq --arg group "$REAL_API_GROUP" \
                 '[.rules[]? | select(.apiGroups[]? == $group)]' "$INPUT_JSON")
             
             # Create component role
             COMPONENT=$(jq -n \
                 --arg name "$COMPONENT_NAME" \
                 --arg label "$AGGREGATION_LABEL" \
-                --arg apigroup "$api_group" \
+                --arg apigroup "$REAL_API_GROUP" \
                 --argjson rules "$RULES" \
                 '{
                     apiVersion: "rbac.authorization.k8s.io/v1",
@@ -300,7 +310,7 @@ case "$GROUPING_STRATEGY" in
                         name: $name,
                         labels: { ($label): "true" },
                         annotations: {
-                            "api-group": $apigroup,
+                            "api-group": (if $apigroup == "" then "core" else $apigroup end),
                             "generated-by": "split-clusterrole-advanced.sh"
                         }
                     },
@@ -322,10 +332,17 @@ case "$GROUPING_STRATEGY" in
         declare -A CATEGORY_RULES
         
         for api_group in $API_GROUPS; do
-            CATEGORY=$(categorize_api_group "$api_group")
+            # Convert __CORE__ marker back to empty string for core API
+            if [[ "$api_group" == "__CORE__" ]]; then
+                REAL_API_GROUP=""
+            else
+                REAL_API_GROUP="$api_group"
+            fi
+            
+            CATEGORY=$(categorize_api_group "$REAL_API_GROUP")
             
             # Extract rules for this API group
-            RULES=$(jq -c --arg group "$api_group" \
+            RULES=$(jq -c --arg group "$REAL_API_GROUP" \
                 '[.rules[]? | select(.apiGroups[]? == $group)]' "$INPUT_JSON")
             
             # Accumulate rules by category
